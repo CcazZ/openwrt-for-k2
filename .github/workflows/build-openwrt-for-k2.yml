@@ -118,11 +118,9 @@ jobs:
     - name: zip files
       id: zip
       run: |
-        cd openwrt/bin/targets/x86/64/
-        zip -r -o openwrt_firmware_$(date +%Y-%m-%d_%H%M%S).zip openwrt/bin/targets/x86/64/openwrt-x86-64-combined-squashfs.vmdk config.seed
+        zip -r -o openwrt_firmware_$(date +%Y-%m-%d_%H%M%S).zip openwrt/bin/*
 
     - name: Upload openwrt.zip to cowtransfer
       run: |
-        cd openwrt/bin/targets/x86/64/
         curl -sL https://git.io/cowtransfer | sh
         ./cowtransfer-uploader -p 8 *.zip
