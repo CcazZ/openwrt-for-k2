@@ -1,0 +1,128 @@
+#===================================================
+# URL: https://github.com/origin-one/openwrt-for-k2.git
+# Description: Build openwrt for Phicomm k2
+# Lisence: MIT
+# Author: CC
+#===================================================
+name: Build OpenWrt for K2
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - '.config'
+  watch:
+    types: started
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede
+#  REPO_URL: https://github.com/openwrt/openwrt
+#  REPO_URL: https://github.com/Lienol/openwrt
+  REPO_BRANCH: master
+  SSH_ACTIONS: false
+  CUSTOM_FEEDS: false
+  CUSTOM_SETTING: true
+  CUSTOM_LUCI: true
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@master
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo -E apt -y update
+        sudo -E apt -y upgrade
+        sudo -E apt -y install zip
+        sudo -E apt -y install asciidoc bash binutils bzip2 flex git-core g++ gcc
+        sudo -E apt -y install util-linux gawk help2man intltool libelf-dev zlib1g-dev
+        sudo -E apt -y install make libncurses5-dev libssl-dev patch perl-modules
+        sudo -E apt -y install python2.7-dev unzip wget gettext xsltproc zlib1g-dev
+        sudo -E apt -y install libxml-parser-perl libusb-dev bin86 bcc sharutils g++-multilib
+        sudo -E apt -y autoremove --purge
+        sudo -E apt -y clean
+
+    - name: Clone openwrt source code
+      run: |
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        mv ../.config ./
+
+    - name: Custom setting
+      if: env.CUSTOM_SETTING == 'true'
+      run: |
+        cd openwrt
+        #modify lan ip
+        sed -i 's/192.168.1.1/10.0.0.1/g' package/base-files/files/bin/config_generate
+        #remove default password
+        sed -i "/CYXluq4wUazHjmCDBCqXF/d" package/lean/default-settings/files/zzz-default-settings
+
+    - name: Custom feeds
+      if: env.CUSTOM_FEEDS == 'true'
+      run: |
+        cd openwrt/feeds/packages/net/
+        rm -rf smartdns
+        wget https://github.com/pymumu/openwrt-smartdns/archive/master.zip -O smartdns.zip
+        unzip smartdns.zip
+        mv openwrt-smartdns-master smartdns
+        cd ../../luci/applications/
+        rm -rf luci-app-smartdns
+        git clone https://github.com/pymumu/luci-app-smartdns
+        
+    - name: Clone luci source code
+      if: env.CUSTOM_LUCI == 'true'
+      run: |
+        cd openwrt/package
+        git clone https://github.com/destan19/OpenAppFilter
+        git clone https://github.com/fangli/openwrt-vm-tools
+        cd lean/
+        git clone https://github.com/rufengsuixing/luci-app-adguardhome
+
+    - name: SSH connection
+      uses: mxschmitt/action-tmate@v2
+      if: env.SSH_ACTIONS == 'true'
+
+    - name: Download package
+      id: package
+      run: |
+        cd openwrt
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s
+        echo "::set-output name=status::success"
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@master
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: openwrt-x86-64-combined-squashfs.vmdk
+        path: openwrt/bin/targets/x86/64/openwrt-x86-64-combined-squashfs.vmdk
+
+    - name: zip files
+      id: zip
+      run: |
+        cd openwrt/bin/targets/x86/64/
+        zip -r -o openwrt_firmware_$(date +%Y-%m-%d_%H%M%S).zip openwrt/bin/targets/x86/64/openwrt-x86-64-combined-squashfs.vmdk config.seed
+
+    - name: Upload openwrt.zip to cowtransfer
+      run: |
+        cd openwrt/bin/targets/x86/64/
+        curl -sL https://git.io/cowtransfer | sh
+        ./cowtransfer-uploader -p 8 *.zip
